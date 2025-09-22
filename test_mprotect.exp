@@ -1,0 +1,136 @@
+#!/usr/bin/env expect
+# mprotect_test runner:
+#   - Boot xv6 and run `mprotect_test`.
+#   - Fail immediately on any "unknown sys call".
+#   - Fail immediately on any line matching "…: FAIL".
+#     if the test crashes/EOF/timeout before it resolves, report that label as FAIL.
+#   - Succeed only after seeing the sentinel line "== ALL mprotect CHECKS PASSED ==".
+#
+# Exit codes:
+#   0 — success (all tests passed)
+#   1 — failure (FAIL/unknown-syscall/timeout/crash)
+
+log_user 1
+set match_max 1048576
+
+proc quit_qemu {} {
+    # Try Ctrl-a x first; if that fails, pkill as fallback.
+    send -- "\001x"
+    set tout 5
+    set ::timeout $tout
+    expect {
+        eof {}
+        timeout {
+            catch { exec pkill -f qemu-system-riscv64 } _
+        }
+    }
+}
+
+# Kill any running QEMU (ignore errors)
+catch { exec pkill -f qemu-system-riscv64 } _
+
+# Build cleanly
+set timeout 60
+spawn make clean
+expect eof
+
+# Boot xv6
+spawn make qemu CPUS=1
+
+# Wait for sh
+expect {
+    -re {init: starting sh} {}
+    timeout {
+        puts "ERROR: Failed to start xv6 shell"
+        exit 1
+    }
+}
+
+# Prompt
+expect -re {\$\s}
+
+# Run test
+send -- "mprotect_test\r"
+
+# State
+set saw_pass 0
+set pending_label ""
+
+# Handle a single line of output
+proc handle_line {line} {
+    upvar pending_label pending_label
+    upvar saw_pass saw_pass
+
+    # unknown syscall → immediate fail
+    if {[regexp {unknown sys call} $line]} {
+        puts "FAIL: saw 'unknown sys call' during mprotect_test"
+        quit_qemu
+        exit 1
+    }
+
+    # success sentinel → immediate success & exit
+    if {[regexp {^== ALL mprotect CHECKS PASSED ==$} $line]} {
+        set saw_pass 1
+        puts "PASS: mprotect_test completed successfully"
+        quit_qemu
+        puts "SUCCESS: All tests passed!"
+        exit 0
+    }
+
+    # explicit FAIL line → immediate fail
+    if {[regexp {^(.+):\s*FAIL$} $line -> label]} {
+        puts "FAIL: $label"
+        quit_qemu
+        exit 1
+    }
+
+    # OK line → clear pending
+    if {[regexp {^(.+):\s*OK$} $line -> _]} {
+        set pending_label ""
+        return
+    }
+
+    # label-only (no OK/FAIL yet) → remember pending
+    if {[regexp {^(.+):\s*$} $line -> lbl]} {
+        set pending_label $lbl
+        return
+    }
+    if {[string first ":" $line] >= 0 && ![regexp {:\s*(OK|FAIL)$} $line]} {
+        set pending_label $line
+        return
+    }
+}
+
+# Main loop: read line-by-line until success/failure/timeout/eof
+while {1} {
+    expect {
+        -re {([^\r\n]+)\r?\n} {
+            set line $expect_out(1,string)
+            handle_line $line
+            exp_continue
+        }
+        -re {\$\s} {
+            # prompt may appear between lines; keep reading
+            exp_continue
+        }
+        timeout {
+            if {$pending_label ne ""} {
+                puts "FAIL: $pending_label (truncated before OK/FAIL)"
+            } else {
+                puts "ERROR: Timeout waiting for mprotect_test output"
+            }
+            quit_qemu
+            exit 1
+        }
+        eof {
+            # QEMU ended; if we saw success earlier we'd have exited already
+            if {$pending_label ne ""} {
+                puts "FAIL: $pending_label (truncated before OK/FAIL)"
+                exit 1
+            } else {
+                puts "ERROR: QEMU exited unexpectedly"
+                exit 1
+            }
+        }
+    }
+}
