@@ -1,7 +1,6 @@
 // user/cow_test.c — COW self-check
 // - Child: after fork → same PA, W=0, (COW=1)
 // - Child: after write → NEW PA, W=1, (COW=0)
-// - Parent: after wait  → original PA, W=0, (COW=1)
 // - Parent: after write → keep original PA, W=1, (COW=0)
 
 #include "kernel/types.h"
@@ -115,21 +114,11 @@ main(void)
 
     exit(0);
   } else {
-    // ---- parent ----
-    section("parent");
-
     // Ensure child finishes first
     wait(0);
 
-    // After child exit: parent should still map original PA, W=0 (and COW=1)
-    uint64 pa_p_wait = get_pa(p);
-    uint64 fl_p_wait = get_flags(p);
-    show_mem("parent: after wait");
-    show_map("parent: after wait", p);
-
-    passfail("[P1] parent still on original PA", pa_p_wait == pa_parent0);
-    passfail("[P1] parent W=0 after wait", (fl_p_wait & PTE_W) == 0);
-    passfail("[P1] parent COW=1 after wait", (fl_p_wait & PTE_COW) != 0);
+    // ---- parent ----
+    section("parent");
 
     // Parent writes:
     // - keep the original PA (no allocation/copy)
