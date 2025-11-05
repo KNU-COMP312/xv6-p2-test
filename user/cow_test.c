@@ -122,7 +122,7 @@ main(void)
 
     // Parent writes:
     // - keep the original PA (no allocation/copy)
-    printf("\nparent writes one byte → keep PA, set W=1, clear COW\n");
+    printf("parent writes one byte → keep PA, set W=1, clear COW\n");
     p[0] = 'P';
 
     uint64 pa_p_wr = get_pa(p);
